@@ -373,6 +373,7 @@ dependencies = [
  "dotenv",
  "jsonwebtoken",
  "serde",
+ "serde_derive",
  "serde_json",
  "sqlx",
  "tokio",

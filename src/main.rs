@@ -1,16 +1,20 @@
-use actix_web::{web, App, HttpServer, HttpRequest, HttpResponse, Responder, post, get};
+use actix_web::{web, App, HttpServer, HttpRequest, HttpResponse, Responder, Error, post, get, delete};
 use actix_cors::Cors;
 use serde::{Deserialize, Serialize};
 use jsonwebtoken::{encode, decode, Header, Algorithm, EncodingKey, DecodingKey, Validation};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::PgPool;
 use sqlx::FromRow;
 use dotenv::dotenv;
 use std::env;
 
+
+// For the jwt token
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
-    sub: String,
+    sub: String, // This is typically used for the username or email
+    user_id: i32, // Add the user ID here
     exp: usize,
 }
 
@@ -25,6 +29,34 @@ struct StoredUser {
     id: i32,
     username: String,
     password_hash: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NewMessage {
+    message: String,
+}
+
+#[derive(Debug, FromRow, Serialize)]
+struct Message {
+    id: i32,
+    user_id: i32,
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct Pagination {
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
+impl Pagination {
+    fn limit(&self) -> u32 {
+        self.limit.unwrap_or(10)
+    }
+
+    fn offset(&self) -> u32 {
+        self.offset.unwrap_or(0)
+    }
 }
 
 
@@ -69,6 +101,7 @@ async fn login(user: web::Json<User>, pool: web::Data<sqlx::PgPool>) -> impl Res
         if verify(&user.password, &stored_user.password_hash).unwrap() {
             let my_claims = Claims {
                 sub: user.username.clone(),
+                user_id: stored_user.id, 
                 exp: 10000000000,
             };
             let token = encode(&Header::default(), &my_claims, &EncodingKey::from_secret("secret".as_ref())).unwrap();
@@ -81,7 +114,7 @@ async fn login(user: web::Json<User>, pool: web::Data<sqlx::PgPool>) -> impl Res
 
 
 // Helper function to authorize requests
-fn authorize_request(req: &HttpRequest) -> Result<Claims, HttpResponse> {
+fn authorize_request(req: &HttpRequest) -> Result<Claims, Error> {
     let auth_header = req.headers().get("Authorization");
 
     if let Some(auth_value) = auth_header {
@@ -100,25 +133,93 @@ fn authorize_request(req: &HttpRequest) -> Result<Claims, HttpResponse> {
         }
     }
 
-    Err(HttpResponse::Unauthorized().json("Unauthorized"))
+    let error_response = HttpResponse::Unauthorized().json("Unauthorized");
+    Err(actix_web::error::InternalError::from_response("Unauthorized", error_response).into())
 }
 
-#[get("/hello")]
-async fn hello(req: HttpRequest) -> impl Responder {
-    match authorize_request(&req) {
-        Ok(_claims) => HttpResponse::Ok().json("Hello, world!"),
-        Err(error) => error,
+
+#[post("/message")]
+async fn post_message(
+    req: HttpRequest,
+    pool: web::Data<sqlx::PgPool>,
+    new_message: web::Json<NewMessage>,
+) -> Result<HttpResponse, Error> {
+    let claims = authorize_request(&req)?;
+
+    let result = sqlx::query!(
+        "INSERT INTO messages (user_id, message) VALUES ($1, $2) RETURNING id",
+        claims.user_id, // Use the user ID from the JWT
+        new_message.message
+    )
+    .fetch_one(pool.get_ref())
+    .await;
+
+    match result {
+        Ok(record) => Ok(HttpResponse::Ok().json(record.id)),
+        Err(e) => {
+            let error_response = HttpResponse::InternalServerError().body(format!("Failed to create message: {}", e));
+            Err(actix_web::error::InternalError::from_response("Database error", error_response).into())
+        },
     }
 }
 
-#[get("/whazzup")]
-async fn whazzup(req: HttpRequest) -> impl Responder {
-    match authorize_request(&req) {
-        Ok(_claims) => HttpResponse::Ok().json("Whazzup!"),
-        Err(error) => error,
+#[delete("/message/{id}")]
+async fn delete_message(
+    req: HttpRequest,
+    pool: web::Data<sqlx::PgPool>,
+    message_id: web::Path<i32>,
+) -> Result<HttpResponse, Error> {
+    let claims = authorize_request(&req)?;
+
+    let result = sqlx::query!(
+        "DELETE FROM messages WHERE id = $1 AND user_id = $2",
+        *message_id,
+        claims.user_id // Use the user ID from the JWT
+    )
+    .execute(pool.get_ref())
+    .await;
+
+    match result {
+        Ok(_) => Ok(HttpResponse::Ok().json("Message deleted successfully")),
+        Err(e) => {
+            let error_response = HttpResponse::InternalServerError().body(format!("Failed to delete message: {}", e));
+            Err(actix_web::error::InternalError::from_response("Database error", error_response).into())
+        },
     }
 }
 
+#[get("/messages/{user_id}")]
+async fn get_messages(
+    pool: web::Data<PgPool>,
+    user_id: web::Path<i32>,
+    pagination: web::Query<Pagination>,
+) -> Result<HttpResponse, Error> {
+    let raw_messages_result = sqlx::query!(
+        "SELECT id, user_id, message FROM messages WHERE user_id = $1 LIMIT $2 OFFSET $3",
+        *user_id,
+        pagination.limit() as i64,
+        pagination.offset() as i64
+    )
+    .fetch_all(pool.get_ref())
+    .await;
+
+    // Unwrap the Result and map the raw messages to the Message struct
+    // return HttpResponse::Error if there is an error
+    let raw_messages = raw_messages_result.map_err(|e| {
+        let error_response = HttpResponse::InternalServerError().body(format!("Failed to fetch messages: {}", e));
+        actix_web::error::InternalError::from_response("Database error", error_response)
+    })?;
+
+    let messages: Vec<Message> = raw_messages.into_iter().map(|raw_msg| {
+        Message {
+            id: raw_msg.id, // Provide a default value for id
+            user_id: raw_msg.user_id.unwrap_or(0), // Provide a default value for user_id
+            message: raw_msg.message, // Provide a default value for message
+        }
+    }).collect();
+
+    Ok(HttpResponse::Ok().json(messages))
+}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -136,7 +237,7 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         let cors = Cors::default()
-            .allow_any_origin()
+            .allow_any_origin() // TODO: Restrict origins
             .allow_any_method()
             .allow_any_header();
 
@@ -145,8 +246,9 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(pool.clone()))
             .service(register)
             .service(login)
-            .service(hello)
-            .service(whazzup)
+            .service(post_message)
+            .service(delete_message)
+            .service(get_messages)
     })
     .bind("127.0.0.1:8080")?
     .run()

@@ -23,9 +23,17 @@
     </div>
 
     <div id="hello">
-      <h2>Get Hello Message</h2>
-      <button onclick="getHello('hello')">Get Hello</button>
-      <button onclick="getHello('whazzup')">Whazzup</button>
+      <h2>Post message</h2>
+      <form id="messageForm">
+        <textarea id="message" placeholder="Message"></textarea>
+        <button>Whazzup</button>
+      </form>
+    </div>
+
+    <div>
+      <h2>Messages</h2>
+      <button onclick="getMessages()">Get Hello</button>
+      <div id="messages"></div>
     </div>
 
     <script>
@@ -79,6 +87,57 @@
         const data = await response.json();
         alert(data);
       }
+
+      async function submit() {
+        const message = document.getElementById("message").value;
+
+        const response = await fetch("http://localhost:8080/message", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ message }),
+        });
+
+        const data = await response.json();
+        alert(data);
+      }
+
+      async function getMessages() {
+        const response = await fetch("http://localhost:8080/messages/3?", {
+          method: "GET",
+          headers: {},
+        });
+        const div = document.getElementById("messages");
+        div.innerHTML = "";
+        const data = await response.json();
+        data.forEach((message) => {
+          const p = document.createElement("p");
+          p.innerText = message.message;
+          div.appendChild(p);
+
+          const button = document.createElement("button");
+          button.innerText = "Delete";
+          p.appendChild(button);
+          button.onclick = async () => {
+            const response = await fetch(
+              "http://localhost:8080/message/" + message.id,
+              {
+                method: "DELETE",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+              }
+            );
+          };
+        });
+      }
+
+      document.getElementById("messageForm").addEventListener("submit", (e) => {
+        e.preventDefault();
+        submit();
+      });
     </script>
   </body>
 </html>
