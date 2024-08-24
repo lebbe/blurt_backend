@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hello World Auth</title>
+  </head>
+  <body>
+    <h1>Hello World Authentication</h1>
+
+    <div id="register">
+      <h2>Register</h2>
+      <input type="text" id="register-username" placeholder="Username" />
+      <input type="password" id="register-password" placeholder="Password" />
+      <button onclick="register()">Register</button>
+    </div>
+
+    <div id="login">
+      <h2>Login</h2>
+      <input type="text" id="login-username" placeholder="Username" />
+      <input type="password" id="login-password" placeholder="Password" />
+      <button onclick="login()">Login</button>
+    </div>
+
+    <div id="hello">
+      <h2>Get Hello Message</h2>
+      <button onclick="getHello('hello')">Get Hello</button>
+      <button onclick="getHello('whazzup')">Whazzup</button>
+    </div>
+
+    <script>
+      let token = "";
+
+      async function register() {
+        const username = document.getElementById("register-username").value;
+        const password = document.getElementById("register-password").value;
+
+        const response = await fetch("http://127.0.0.1:8080/register", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ username, password }),
+        });
+
+        const data = await response.json();
+        alert(data);
+      }
+
+      async function login() {
+        const username = document.getElementById("login-username").value;
+        const password = document.getElementById("login-password").value;
+
+        const response = await fetch("http://127.0.0.1:8080/login", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ username, password }),
+        });
+
+        const data = await response.json();
+        if (response.status === 200) {
+          token = data;
+          alert("Login successful!");
+        } else {
+          alert("Login failed!");
+        }
+      }
+
+      async function getHello(where) {
+        const response = await fetch("http://127.0.0.1:8080/" + where, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        const data = await response.json();
+        alert(data);
+      }
+    </script>
+  </body>
+</html>
